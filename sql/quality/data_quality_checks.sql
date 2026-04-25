@@ -1,39 +1,48 @@
--- CityPulse Analytics Warehouse data quality checks
--- These checks are written as readable SQL so they can be explained during interviews.
+-- CityPulse warehouse quality checks.
+-- These are designed to catch problems at the staging, warehouse, and mart layers.
 
--- 1. Confirm staging has records after importing from CityPulse ETL.
-SELECT 'staging_row_count' AS check_name, COUNT(*) AS value
-FROM staging.service_requests;
-
--- 2. Check for duplicate request IDs.
-SELECT 'duplicate_request_ids' AS check_name, COUNT(*) AS value
+-- 1. Staging should not contain duplicate request IDs.
+SELECT
+    'duplicate_request_ids_in_staging' AS check_name,
+    COUNT(*) AS failed_records
 FROM (
     SELECT request_id
     FROM staging.service_requests
     GROUP BY request_id
     HAVING COUNT(*) > 1
-) duplicates;
+) dupes;
 
--- 3. Check missing created timestamps.
-SELECT 'missing_created_at' AS check_name, COUNT(*) AS value
+-- 2. Required event timestamp should exist.
+SELECT
+    'missing_created_at_in_staging' AS check_name,
+    COUNT(*) AS failed_records
 FROM staging.service_requests
 WHERE created_at IS NULL;
 
--- 4. Check fact table matches staging row count.
-SELECT 'fact_vs_staging_difference' AS check_name,
-       (SELECT COUNT(*) FROM staging.service_requests)
-       -
-       (SELECT COUNT(*) FROM warehouse.fact_service_requests) AS value;
+-- 3. Fact table should not contain orphaned dimension keys.
+SELECT
+    'orphaned_date_keys' AS check_name,
+    COUNT(*) AS failed_records
+FROM warehouse.fact_service_requests f
+LEFT JOIN warehouse.dim_date d ON f.date_key = d.date_key
+WHERE d.date_key IS NULL;
 
--- 5. Check that every fact record joined to required dimensions.
-SELECT 'fact_missing_dimension_keys' AS check_name, COUNT(*) AS value
-FROM warehouse.fact_service_requests
-WHERE date_key IS NULL
-   OR location_key IS NULL
-   OR request_type_key IS NULL
-   OR status_key IS NULL;
+SELECT
+    'orphaned_location_keys' AS check_name,
+    COUNT(*) AS failed_records
+FROM warehouse.fact_service_requests f
+LEFT JOIN warehouse.dim_location l ON f.location_key = l.location_key
+WHERE l.location_key IS NULL;
 
--- 6. Identify impossible negative resolution times.
-SELECT 'negative_resolution_hours' AS check_name, COUNT(*) AS value
+-- 4. Resolution hours should not be negative.
+SELECT
+    'negative_resolution_hours' AS check_name,
+    COUNT(*) AS failed_records
 FROM warehouse.fact_service_requests
 WHERE resolution_hours < 0;
+
+-- 5. Mart tables should contain rows after build.
+SELECT
+    'empty_request_volume_mart' AS check_name,
+    CASE WHEN COUNT(*) = 0 THEN 1 ELSE 0 END AS failed_records
+FROM marts.request_volume_monthly;

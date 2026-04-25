@@ -1,216 +1,179 @@
 # CityPulse Analytics Warehouse
 
-CityPulse Analytics Warehouse is the downstream dimensional warehouse for the **CityPulse ETL** pipeline. The ETL project ingests and validates municipal service request records into PostgreSQL; this warehouse reads that cleaned table, builds a star schema, and creates reporting marts for civic operations analysis.
+CityPulse Analytics Warehouse is a PostgreSQL dimensional warehouse that extends the CityPulse ETL pipeline. The ETL project prepares cleaned municipal service request records; this warehouse turns those records into fact tables, dimensions, quality checks, and reporting marts that answer operational analytics questions.
 
-This project is designed as a serious graduating-student analytics engineering portfolio piece. It focuses on a realistic workflow: **raw civic data → cleaned ETL output → staging layer → dimensional warehouse → reporting marts → SQL analysis**.
+The project is intentionally scoped as a serious capstone-style analytics engineering system. It is not a generic “enterprise” warehouse. It focuses on one clearly defined domain: civic service request operations.
 
----
+## Analytical Questions
 
-## How This Interfaces with CityPulse ETL
+The warehouse is designed to answer questions such as:
 
-The integration point is the table produced by the CityPulse ETL project:
+- Which service categories create the highest monthly workload?
+- Which boroughs or locations have the longest resolution times?
+- How many open, closed, and escalated requests exist by month?
+- Which request types show seasonal spikes?
+- How do priority requests compare to standard requests over time?
+- Which reporting marts would be useful for a public operations dashboard?
 
-```text
+## System Boundary
+
+This repository starts where the CityPulse ETL pipeline ends.
+
+CityPulse ETL is responsible for ingestion, cleaning, and validation. This repository assumes the ETL has loaded cleaned records into PostgreSQL as:
+
+```sql
 public.service_requests
 ```
 
-The warehouse build imports that table into its own staging schema:
+This warehouse then builds:
 
 ```text
-public.service_requests
-        ↓
 staging.service_requests
-        ↓
 warehouse.dim_date
 warehouse.dim_location
 warehouse.dim_request_type
 warehouse.dim_status
 warehouse.fact_service_requests
-        ↓
-marts.* reporting views
+marts.request_volume_monthly
+marts.response_time_distribution
+marts.priority_request_trends
+marts.open_request_backlog
 ```
 
-That means this repo is not just a separate SQL demo. It is written as the analytics layer that runs **after** the CityPulse ETL pipeline finishes loading cleaned records into PostgreSQL.
+## Lineage Overview
 
----
+![CityPulse Lineage Flow](assets/citypulse_lineage_flow.png)
 
-## Visual Overview
+The lineage diagram shows the actual boundary between the upstream CityPulse ETL pipeline and this warehouse. The warehouse does not scrape or clean raw records. It imports cleaned ETL output, standardizes it into staging, builds dimensions and facts, and exposes reporting marts.
 
-### End-to-End Integration
-![CityPulse integration flow](assets/citypulse_integration_flow.png)
+## Star Schema and Grain
 
-### Warehouse Architecture
-![Warehouse architecture](assets/citypulse_warehouse_architecture.png)
+![Star Schema Grain Definition](assets/star_schema_grain_definition.png)
 
-### Star Schema
-![Star schema](assets/citypulse_star_schema.png)
+The fact table grain is:
 
-### Reporting Flow
-![Reporting flow](assets/citypulse_reporting_flow.png)
+> one row per service request event
 
----
+This matters because every metric in the reporting layer depends on that grain. Request counts, backlog counts, average resolution time, and priority trends all aggregate from the same event-level fact table.
 
-## What the Warehouse Adds
+## Schema Dependency Graph
 
-CityPulse ETL focuses on row-level cleaning and loading. This warehouse adds the analytics layer:
+![Schema Dependency Graph](assets/schema_dependency_graph.png)
 
-- staging schema that standardizes the ETL output
-- date, location, request type, and status dimensions
-- fact table with one row per service request
-- reusable mart views for reporting
-- data quality checks across staging and warehouse layers
-- example SQL queries for business-style analysis
+The dependency graph shows how dimensions feed the fact table and how marts depend on both the fact table and dimensions. This is more useful than a generic architecture diagram because it explains which tables must be built first.
 
----
+## Incremental Load Strategy
 
-## Data Model
+![Incremental Load Strategy](assets/incremental_load_strategy.png)
 
-**Fact table**
+The warehouse includes an append-safe incremental loading pattern. Existing request IDs are not reinserted into the fact table, which allows repeated refreshes without duplicating historical events.
 
-- `warehouse.fact_service_requests`
+## Reporting Mart Pipeline
 
-**Dimensions**
+![Reporting Mart Pipeline](assets/reporting_mart_pipeline.png)
 
-- `warehouse.dim_date`
-- `warehouse.dim_location`
-- `warehouse.dim_request_type`
-- `warehouse.dim_status`
-
-**Reporting marts**
-
-- `marts.monthly_service_volume`
-- `marts.category_workload`
-- `marts.borough_performance`
-- `marts.resolution_time_analysis`
-- `marts.operational_kpi_summary`
-
----
-
-## Quick Start
-
-### 1. Start PostgreSQL
-
-If you are using this repo by itself:
-
-```bash
-docker compose up -d
-```
-
-If you are running it alongside the CityPulse ETL repo, use the same PostgreSQL container/database used by CityPulse ETL.
-
-### 2. Run CityPulse ETL first
-
-From the CityPulse ETL repo:
-
-```bash
-python scripts/run_pipeline.py
-```
-
-This should create or refresh:
-
-```text
-public.service_requests
-```
-
-### 3. Build the warehouse from CityPulse ETL output
-
-From this repo:
-
-```bash
-psql -h localhost -U citypulse_user -d citypulse_warehouse -f sql/run_citypulse_integrated_build.sql
-```
-
-### 4. Run quality checks
-
-```bash
-psql -h localhost -U citypulse_user -d citypulse_warehouse -f sql/quality/data_quality_checks.sql
-```
-
-### 5. Run example analysis queries
-
-```bash
-psql -h localhost -U citypulse_user -d citypulse_warehouse -f sql/analytics/example_service_queries.sql
-```
-
----
-
-## Optional Standalone Demo
-
-If `public.service_requests` does not exist yet, run:
-
-```bash
-psql -h localhost -U citypulse_user -d citypulse_warehouse -f scripts/load_sample_raw.sql
-psql -h localhost -U citypulse_user -d citypulse_warehouse -f sql/run_warehouse_build.sql
-```
-
-The standalone script exists so the warehouse can still be reviewed independently, but the main intended path is the integrated CityPulse ETL build.
-
----
+The marts are organized around operational questions: volume, backlog, response time, and priority workload. They are designed to support dashboards or analyst queries without requiring users to join the full dimensional model manually.
 
 ## Repository Structure
 
 ```text
 CityPulse-Analytics-Warehouse/
-├── assets/                     # README diagrams and visuals
-├── docs/                       # walkthroughs and interview explanation notes
-├── scripts/                    # sample loading and helper scripts
+├── assets/                         # Meaningful diagrams and schema visuals
+├── docs/                           # Explanation, lineage, grain, and interview notes
+├── scripts/                        # Build scripts and sample data utilities
 ├── sql/
-│   ├── integration/            # reads from CityPulse ETL public.service_requests
-│   ├── raw/                    # standalone sample landing tables
-│   ├── staging/                # standardized staging schema
-│   ├── warehouse/              # dimensions and fact table build scripts
-│   ├── marts/                  # reporting views
-│   ├── quality/                # validation checks
-│   └── analytics/              # example analysis queries
+│   ├── integration/                # Imports CityPulse ETL output into staging
+│   ├── staging/                    # Staging schema setup
+│   ├── warehouse/                  # Dimensions, fact table, constraints, SCD2 example
+│   ├── incremental/                # Incremental fact load pattern
+│   ├── marts/                      # Reporting marts and materialized views
+│   ├── quality/                    # Data quality checks
+│   └── analytics/                  # Example analyst queries
 ├── docker-compose.yml
 └── README.md
 ```
 
----
+## How to Run
 
-## Key Engineering Concepts Demonstrated
+Start PostgreSQL:
 
-- PostgreSQL schema design
-- pipeline integration across two related projects
-- staged transformation architecture
-- star-schema dimensional modeling
-- fact and dimension table construction
-- SQL reporting marts
-- data quality checks
-- reproducible local database setup with Docker
-- interview-friendly documentation
+```powershell
+docker compose up -d
+```
 
----
+Run the integrated warehouse build after CityPulse ETL has loaded `public.service_requests`:
 
-## Design Decisions
+```powershell
+scripts\run_full_lineage_build.ps1
+```
 
-This project avoids unnecessary enterprise claims and focuses on fundamentals that are explainable in an interview. The warehouse is intentionally batch-oriented, uses readable SQL, and keeps transformations transparent so each layer can be defended clearly.
+Or run directly with psql:
 
-The goal is to show that I understand how cleaned operational data becomes a structured analytics model, not just how to write isolated SQL queries.
+```powershell
+psql -h localhost -U citypulse -d citypulse -f sql/run_citypulse_integrated_build.sql
+```
 
----
+## Build Order
+
+The integrated build follows this order:
+
+```text
+1. Create staging schema
+2. Import cleaned CityPulse ETL records from public.service_requests
+3. Create warehouse dimensions
+4. Create fact_service_requests
+5. Add constraints
+6. Run incremental fact load example
+7. Create reporting marts
+8. Run data quality checks
+```
+
+## Warehouse Design Decisions
+
+- The warehouse uses a star schema because the main analytical need is aggregation by date, location, request type, and status.
+- Staging exists to isolate ETL output from warehouse logic.
+- The fact table stores event-level service request records.
+- Reporting marts are materialized views to make repeated analytics queries simpler.
+- Incremental loading is demonstrated with request-level duplicate protection.
+- SCD Type 2 logic is included as an example for tracking changes in location attributes over time.
+
+## Key SQL Artifacts
+
+| File | Purpose |
+|---|---|
+| `sql/integration/import_from_citypulse_etl.sql` | Imports the ETL output into staging |
+| `sql/warehouse/create_dimensions.sql` | Builds date, location, request type, and status dimensions |
+| `sql/warehouse/create_fact_service_requests.sql` | Builds the event-level fact table |
+| `sql/warehouse/add_constraints.sql` | Adds primary and foreign key constraints |
+| `sql/incremental/load_fact_incremental.sql` | Demonstrates append-safe fact loading |
+| `sql/warehouse/scd2_dim_location.sql` | Demonstrates slowly changing dimension logic |
+| `sql/marts/create_reporting_views.sql` | Creates reporting marts |
+| `sql/quality/data_quality_checks.sql` | Runs quality checks against staging and warehouse layers |
+
+## Why This Project Exists
+
+I built this as a downstream analytics layer for my CityPulse ETL pipeline. The ETL project handles ingestion and cleaning; this project focuses on analytical modeling, lineage, and reporting readiness.
+
+The goal is to show that I understand not just how to move data, but how to structure it so analysts and decision-makers can query it reliably.
 
 ## Limitations
 
-- The project assumes CityPulse ETL has loaded `public.service_requests` first.
-- The current warehouse uses full-refresh SQL builds instead of incremental loading.
-- The dataset is portfolio-scale, not production-scale.
-- Future versions could add dbt, Airflow, SCD Type 2 dimensions, and incremental fact loading.
-
----
+- The project uses a local PostgreSQL environment rather than a managed cloud warehouse.
+- The SCD2 logic is included as a focused example, not a full production dimension management framework.
+- The mart layer is intentionally small and tied to a single domain.
+- The pipeline is SQL-script orchestrated rather than Airflow-managed.
 
 ## Future Improvements
 
-- Convert SQL scripts into dbt models
-- Add incremental fact loading
-- Add slowly changing dimensions
-- Add dashboard integration with Streamlit or Power BI
-- Add GitHub Actions for SQL linting
-
----
+- Add Airflow or Prefect orchestration
+- Add dbt models and tests
+- Add dashboard layer with Metabase or Streamlit
+- Add CI checks for SQL linting
+- Add seed data generation for larger scale testing
+- Add role-based schemas for analyst and admin access
 
 ## Author
 
-**Zachary Amachee**  
+Zachary Amachee  
 CIS @ Baruch College  
-Analytics Engineering • Data Engineering • Business Intelligence
+Data Engineering • Analytics Engineering • Applied Analytics
