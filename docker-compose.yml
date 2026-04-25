@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: citypulse_warehouse_postgres
+    environment:
+      POSTGRES_DB: citypulse_warehouse
+      POSTGRES_USER: citypulse_user
+      POSTGRES_PASSWORD: citypulse_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - citypulse_warehouse_data:/var/lib/postgresql/data
+volumes:
+  citypulse_warehouse_data:
